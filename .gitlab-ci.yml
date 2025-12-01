@@ -54,7 +54,8 @@ unit_tests_backend:
     - echo "🧪 Ejecutando pruebas unitarias del Backend..."
     - pip install -r backend/requirements.txt
     - pip install pytest
-    # Apuntamos a la carpeta correcta 'backend/tests'
+    # ESTA ES LA LÍNEA MÁGICA QUE SOLUCIONA EL ERROR:
+    - export PYTHONPATH=backend
     - pytest backend/tests/
   artifacts:
     when: always
