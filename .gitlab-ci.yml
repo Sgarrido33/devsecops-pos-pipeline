@@ -50,11 +50,16 @@ validate_frontend_deps:
 unit_tests_backend:
   stage: test-backend
   image: python:3.10-slim
+  # Definimos variables dummy para que app.py no falle al importar
+  variables:
+    MYSQL_USER: "test_user"
+    MYSQL_PASSWORD: "test_password"
+    MYSQL_DATABASE: "test_db"
+    MYSQL_HOST: "localhost"
   script:
     - echo "🧪 Ejecutando pruebas unitarias del Backend..."
     - pip install -r backend/requirements.txt
     - pip install pytest
-    # ESTA ES LA LÍNEA MÁGICA QUE SOLUCIONA EL ERROR:
     - export PYTHONPATH=backend
     - pytest backend/tests/
   artifacts:
