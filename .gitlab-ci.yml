@@ -50,18 +50,27 @@ validate_frontend_deps:
 unit_tests_backend:
   stage: test-backend
   image: python:3.10-slim
-  # Definimos variables dummy para que app.py no falle al importar
+  # 1. Agregamos el servicio de base de datos
+  services:
+    - name: mysql:5.7
+      alias: mysql
+
   variables:
+    # 2. Apuntamos al alias del servicio (NO a localhost)
+    MYSQL_HOST: "mysql"
     MYSQL_USER: "test_user"
     MYSQL_PASSWORD: "test_password"
     MYSQL_DATABASE: "test_db"
-    MYSQL_HOST: "localhost"
+    # 3. Necesario para que el contenedor de MySQL arranque
+    MYSQL_ROOT_PASSWORD: "root_password" 
+
   script:
     - echo "🧪 Ejecutando pruebas unitarias del Backend..."
     - pip install -r backend/requirements.txt
-    - pip install pytest
+    - pip install pytest cryptography # cryptography suele ser necesario para pymysql/auth
     - export PYTHONPATH=backend
-    - pytest backend/tests/
+    # Agregamos --junitxml para asegurar que el reporte se genere donde GitLab lo espera
+    - pytest backend/tests/ --junitxml=report.xml
   artifacts:
     when: always
     reports:
