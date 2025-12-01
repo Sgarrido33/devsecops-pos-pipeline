@@ -1,0 +1,212 @@
+image: docker:latest
+
+services:
+  - docker:dind
+
+variables:
+  AUTO_DEVOPS_ENABLED: "false"
+  IMAGE_TAG: "$DOCKER_USER/proyecto-devsecops:latest"
+
+# ---------------------------------------------------------------------------
+# DEFINICIÓN DE ETAPAS (STAGES) - ORDEN ACTUALIZADO
+# ---------------------------------------------------------------------------
+stages:
+  - validate-backend
+  - validate-frontend
+  - test-backend
+  - build-backend
+  - Secret-Scanning-IAC
+  - IAC-Scanning-Checkov
+  - SCA(trivy)        # <--- AHORA VA PRIMERO
+  - SAST(Semgrep)     # <--- LUEGO EL SAST
+  - DAST(OWASP)
+  - deploy
+
+# =====================================================
+# 1. VALIDATE BACKEND
+# =====================================================
+validate_backend_structure:
+  stage: validate-backend
+  image: alpine:latest
+  script:
+    - echo "🔍 Verificando estructura Backend..."
+    - ls -la backend/
+    - if [ ! -f "Dockerfile" ]; then echo "❌ Falta Dockerfile"; exit 1; fi
+    - echo "✅ Estructura Backend correcta."
+
+# =====================================================
+# 2. VALIDATE FRONTEND
+# =====================================================
+validate_frontend_deps:
+  stage: validate-frontend
+  image: node:18-alpine
+  script:
+    - echo "📦 Verificando dependencias del Frontend..."
+    - cd frontend
+    - npm install --package-lock-only --ignore-scripts
+    - echo "✅ Frontend tiene un package.json válido."
+
+# =====================================================
+# 3. TEST BACKEND
+# =====================================================
+unit_tests_backend:
+  stage: test-backend
+  image: python:3.10-slim
+  script:
+    - echo "🧪 Ejecutando pruebas unitarias del Backend..."
+    - pip install -r backend/requirements.txt
+    - pip install pytest
+    - pytest backend/tests/
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+
+# =====================================================
+# 4. BUILD BACKEND
+# =====================================================
+build_image_dry_run:
+  stage: build-backend
+  script:
+    - echo "🐳 Verificando construcción de la imagen Backend..."
+    - docker build -t test-backend .
+    - echo "✅ Build exitoso."
+
+# =====================================================
+# 5. SECRET SCANNING (IAC + REPO GENERAL)
+# =====================================================
+scan_secrets_repo_gitleaks:
+  stage: Secret-Scanning-IAC
+  image:
+    name: zricethezav/gitleaks:latest
+    entrypoint: [""]
+  script:
+    - gitleaks detect --source=. -v --report-path gitleaks-report.json
+  allow_failure: true
+  artifacts:
+    paths: [gitleaks-report.json]
+
+scan_secrets_iac_trufflehog:
+  stage: Secret-Scanning-IAC
+  image: ubuntu:22.04
+  before_script:
+    - apt-get update -y && apt-get install -y git curl jq python3 python3-pip --no-install-recommends
+  script:
+    - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b .
+    - mkdir -p ./iac/cloud_examples
+    - ./trufflehog filesystem ./iac/cloud_examples --results=verified,unknown --json > trufflehog-report.json || true
+    - if [ ! -s trufflehog-report.json ]; then echo '{"results":[]}' > trufflehog-report.json; fi
+  allow_failure: true
+  artifacts:
+    paths: [trufflehog-report.json]
+
+# =====================================================
+# 6. IAC SCANNING (CHECKOV)
+# =====================================================
+iac_scan_checkov:
+  stage: IAC-Scanning-Checkov
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint: [""]
+  script:
+    - mkdir -p ./iac/cloud_examples
+    - checkov -d ./iac/cloud_examples -o json > checkov-report.json || true
+    - cat checkov-report.json
+  allow_failure: true
+  artifacts:
+    paths: [checkov-report.json]
+
+# =====================================================
+# 7. SCA (TRIVY) - AHORA ANTES DE SAST
+# =====================================================
+sca_trivy_scan:
+  stage: SCA(trivy)
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - trivy fs . --format json --output trivy-report.json
+  allow_failure: true
+  artifacts:
+    paths: [trivy-report.json]
+
+# =====================================================
+# 8. SAST (SEMGREP)
+# =====================================================
+sast_semgrep_scan:
+  stage: SAST(Semgrep)
+  image:
+    name: returntocorp/semgrep:latest
+    entrypoint: [""]
+  script:
+    - rm -rf /src 2>/dev/null || true
+    - ln -s $CI_PROJECT_DIR /src
+    - semgrep scan --config=auto --json --output=semgrep-report.json .
+  allow_failure: true
+  artifacts:
+    paths: [semgrep-report.json]
+
+# =====================================================
+# 9. DAST (OWASP ZAP) - CON NGINX PROXY
+# =====================================================
+dast_owasp_zap:
+  stage: DAST(OWASP)
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_NETWORK: "app-net"
+  script:
+    - echo "🚀 Iniciando entorno DAST (Nginx + Backend)..."
+    - docker network create $DOCKER_NETWORK
+    
+    # 1. Levantar BACKEND
+    - |
+      docker run -d --name web --network $DOCKER_NETWORK \
+      -v $PWD/backend:/app -w /app \
+      python:3.10-slim \
+      sh -c "pip install -r requirements.txt && flask run --host=0.0.0.0 --port=5000"
+    - sleep 5
+
+    # 2. Levantar NGINX
+    - |
+      docker run -d --name nginx-proxy --network $DOCKER_NETWORK \
+      -p 80:80 \
+      -v $PWD/nginx/nginx.conf:/etc/nginx/conf.d/default.conf \
+      nginx:latest
+    - sleep 5
+    
+    # 3. ATACAR A NGINX
+    - echo "🔥 Atacando Nginx con OWASP ZAP..."
+    - |
+      docker run --rm --network $DOCKER_NETWORK \
+      -v $PWD:/zap/wrk:rw \
+      zaproxy/zap-stable \
+      zap-baseline.py \
+      -t http://nginx-proxy \
+      -r zap-nginx-report.html || true
+      
+    - docker rm -f nginx-proxy web
+    - docker network rm $DOCKER_NETWORK
+  artifacts:
+    when: always
+    paths:
+      - zap-nginx-report.html
+    expire_in: 1 week
+
+# =====================================================
+# 10. DEPLOY (A DOCKER HUB)
+# =====================================================
+deploy_to_dockerhub:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - echo "🚚 Desplegando a Docker Hub..."
+    - docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
+    - docker build -t $IMAGE_TAG .
+    - docker push $IMAGE_TAG
+    - echo "✅ Imagen publicada: $IMAGE_TAG"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"

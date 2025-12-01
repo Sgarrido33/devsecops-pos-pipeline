@@ -1,0 +1,38 @@
+:root {
+  font-size: 14px;
+}
+
+main.container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  height: 95vh;
+  padding: 1rem;
+}
+
+article {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.scrollable-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.cart-panel .scrollable-list {
+    max-height: 250px; 
+}
+
+
+li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+button {
+  width: auto;
+}
