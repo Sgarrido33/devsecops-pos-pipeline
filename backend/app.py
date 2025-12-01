@@ -178,8 +178,9 @@ def get_sales(current_user):
     return jsonify([sale.to_dict() for sale in sales])
 
 # --- Inicialización de la BD ---
-with app.app_context():
-    db.create_all()
-
-if __name__ == "__main__":
-    app.run(port=5000)
+if __name__ == '__main__':
+    # Mueve la creación de tablas DENTRO de este bloque
+    with app.app_context():
+        db.create_all()
+        
+    app.run(host="0.0.0.0", port=5000)
