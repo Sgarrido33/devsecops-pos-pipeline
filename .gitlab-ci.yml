@@ -60,6 +60,8 @@ unit_tests_backend:
     when: always
     reports:
       junit: report.xml
+    paths:
+      - report.xml
 
 # =====================================================
 # 3. BUILD BACKEND (Dry Run)
@@ -178,6 +180,10 @@ dast_owasp_zap:
     
     # 3. ATACAR A NGINX (Puerto 80)
     - echo "🔥 Atacando Nginx con OWASP ZAP..."
+
+    - touch zap-nginx-report.html        # Creamos el archivo vacío
+    - chmod 666 zap-nginx-report.html
+
     - |
       docker run --rm --network $DOCKER_NETWORK \
       -v $PWD:/zap/wrk:rw \
