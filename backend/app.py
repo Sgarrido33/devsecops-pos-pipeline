@@ -30,7 +30,7 @@ db = SQLAlchemy(app)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
     products = db.relationship("Product", backref="owner", lazy=True)
     sales = db.relationship("Sale", backref="owner", lazy=True)
 
