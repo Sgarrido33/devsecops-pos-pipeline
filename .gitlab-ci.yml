@@ -5,12 +5,11 @@ services:
 
 variables:
   AUTO_DEVOPS_ENABLED: "false"
-  # Asegúrate de configurar DOCKER_USER y DOCKER_PASS en Settings > CI/CD > Variables
+  # Ajusta tu usuario aquí o en las variables de GitLab
   IMAGE_TAG: "$DOCKER_USER/proyecto-devsecops:latest"
 
 stages:
-  - validate-backend
-  - validate-frontend
+  - validate-structure
   - test-backend
   - build-backend
   - Secret-Scanning-IAC
@@ -21,75 +20,62 @@ stages:
   - deploy
 
 # =====================================================
-# 1. VALIDATE BACKEND
+# 1. VALIDATE STRUCTURE (Backend & Frontend)
 # =====================================================
-validate_backend_structure:
-  stage: validate-backend
+validate_structure:
+  stage: validate-structure
   image: alpine:latest
   script:
-    - echo "🔍 Verificando estructura Backend..."
-    - ls -la backend/
-    - "if [ ! -f Dockerfile ]; then echo ❌ Falta Dockerfile; exit 1; fi"
-    - echo "✅ Estructura Backend correcta."
+    - echo "🔍 Verificando estructura del proyecto..."
+    # Verificamos que existan las carpetas clave
+    - "if [ ! -d backend ]; then echo ❌ Falta carpeta backend; exit 1; fi"
+    - "if [ ! -d nginx ]; then echo ❌ Falta carpeta nginx; exit 1; fi"
+    - "if [ ! -f Dockerfile ]; then echo ❌ Falta Dockerfile en raíz; exit 1; fi"
+    - echo "✅ Estructura base correcta."
 
 # =====================================================
-# 2. VALIDATE FRONTEND
-# =====================================================
-validate_frontend_deps:
-  stage: validate-frontend
-  image: node:18-alpine
-  script:
-    - echo "📦 Verificando dependencias del Frontend..."
-    - cd frontend
-    - npm install --package-lock-only --ignore-scripts
-    - echo "✅ Dependencias de Frontend validadas."
-
-# =====================================================
-# 3. TEST BACKEND
+# 2. TEST BACKEND (Unit Tests)
 # =====================================================
 unit_tests_backend:
   stage: test-backend
   image: python:3.10-slim
-  # 1. Agregamos el servicio de base de datos
   services:
     - name: mysql:5.7
       alias: mysql
-
   variables:
-    # 2. Apuntamos al alias del servicio (NO a localhost)
     MYSQL_HOST: "mysql"
     MYSQL_USER: "test_user"
     MYSQL_PASSWORD: "test_password"
     MYSQL_DATABASE: "test_db"
-    # 3. Necesario para que el contenedor de MySQL arranque
     MYSQL_ROOT_PASSWORD: "root_password" 
-
   script:
     - echo "🧪 Ejecutando pruebas unitarias del Backend..."
-    - pip install -r backend/requirements.txt
-    - pip install pytest cryptography # cryptography suele ser necesario para pymysql/auth
-    - export PYTHONPATH=backend
-    # Agregamos --junitxml para asegurar que el reporte se genere donde GitLab lo espera
-    - pytest backend/tests/ --junitxml=report.xml
+    - cd backend
+    - pip install -r requirements.txt
+    - pip install pytest cryptography
+    # Ejecutamos los tests. PYTHONPATH asegura que Python encuentre los módulos
+    - export PYTHONPATH=.
+    - pytest tests/ --junitxml=../report.xml
   artifacts:
     when: always
     reports:
       junit: report.xml
 
 # =====================================================
-# 4. BUILD BACKEND
+# 3. BUILD BACKEND (Dry Run)
 # =====================================================
 build_image_dry_run:
   stage: build-backend
   script:
-    - echo "🐳 Verificando construcción de la imagen Backend..."
+    - echo "🐳 Verificando construcción de la imagen (Backend)..."
+    # Asumimos que el Dockerfile de la raíz es para la App Python
     - docker build -t test-backend .
     - echo "✅ Build exitoso."
 
 # =====================================================
-# 5. SECRET SCANNING (IAC + REPO GENERAL)
+# 4. SECRET SCANNING (IAC + REPO)
 # =====================================================
-scan_secrets_repo_gitleaks:
+scan_secrets_gitleaks:
   stage: Secret-Scanning-IAC
   image:
     name: zricethezav/gitleaks:latest
@@ -100,22 +86,21 @@ scan_secrets_repo_gitleaks:
   artifacts:
     paths: [gitleaks-report.json]
 
-scan_secrets_iac_trufflehog:
+scan_secrets_trufflehog:
   stage: Secret-Scanning-IAC
   image: ubuntu:22.04
   before_script:
-    - apt-get update -y && apt-get install -y git curl jq python3 python3-pip --no-install-recommends
+    - apt-get update -y && apt-get install -y git curl jq
   script:
     - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b .
-    - mkdir -p ./iac/cloud_examples
-    - "./trufflehog filesystem ./iac/cloud_examples --results=verified,unknown --json > trufflehog-report.json || true"
-    - "if [ ! -s trufflehog-report.json ]; then echo '{\"results\":[]}' > trufflehog-report.json; fi"
+    # Escaneamos todo el sistema de archivos actual
+    - "./trufflehog filesystem . --results=verified,unknown --json > trufflehog-report.json || true"
   allow_failure: true
   artifacts:
     paths: [trufflehog-report.json]
 
 # =====================================================
-# 6. IAC SCANNING (CHECKOV)
+# 5. IAC SCANNING (CHECKOV)
 # =====================================================
 iac_scan_checkov:
   stage: IAC-Scanning-Checkov
@@ -123,15 +108,15 @@ iac_scan_checkov:
     name: bridgecrew/checkov:latest
     entrypoint: [""]
   script:
-    - mkdir -p ./iac/cloud_examples
-    - "checkov -d ./iac/cloud_examples -o json > checkov-report.json || true"
+    # Escanea el Dockerfile raíz y configs de Nginx si las detecta
+    - "checkov -d . --check CKV_DOCKER_*,CKV_NGINX_* -o json > checkov-report.json || true"
     - cat checkov-report.json
   allow_failure: true
   artifacts:
     paths: [checkov-report.json]
 
 # =====================================================
-# 7. SCA (TRIVY)
+# 6. SCA (TRIVY)
 # =====================================================
 sca_trivy_scan:
   stage: SCA(trivy)
@@ -145,7 +130,7 @@ sca_trivy_scan:
     paths: [trivy-report.json]
 
 # =====================================================
-# 8. SAST (SEMGREP)
+# 7. SAST (SEMGREP)
 # =====================================================
 sast_semgrep_scan:
   stage: SAST(Semgrep)
@@ -161,7 +146,7 @@ sast_semgrep_scan:
     paths: [semgrep-report.json]
 
 # =====================================================
-# 9. DAST (OWASP ZAP) - CON NGINX
+# 8. DAST (OWASP ZAP) - PRODUCCION (NGINX + GUNICORN)
 # =====================================================
 dast_owasp_zap:
   stage: DAST(OWASP)
@@ -171,18 +156,19 @@ dast_owasp_zap:
   variables:
     DOCKER_NETWORK: "app-net"
   script:
-    - echo "🚀 Iniciando entorno DAST (Nginx + Backend)..."
+    - echo "🚀 Iniciando entorno DAST Simulando Producción..."
     - docker network create $DOCKER_NETWORK
     
-    # 1. Levantar BACKEND (Usando ruta correcta 'backend/')
+    # 1. Levantar BACKEND (Python + Gunicorn)
+    # Importante: Nombre 'web' para que Nginx lo encuentre
     - |
       docker run -d --name web --network $DOCKER_NETWORK \
       -v $PWD/backend:/app -w /app \
       python:3.10-slim \
-      sh -c "pip install -r requirements.txt && flask run --host=0.0.0.0 --port=5000"
-    - sleep 5
+      sh -c "pip install -r requirements.txt && pip install gunicorn && gunicorn -w 4 -b 0.0.0.0:5000 wsgi:app"
+    - sleep 10 # Damos tiempo a Gunicorn para arrancar
 
-    # 2. Levantar NGINX
+    # 2. Levantar NGINX (Reverse Proxy)
     - |
       docker run -d --name nginx-proxy --network $DOCKER_NETWORK \
       -p 80:80 \
@@ -190,7 +176,7 @@ dast_owasp_zap:
       nginx:latest
     - sleep 5
     
-    # 3. ATACAR A NGINX
+    # 3. ATACAR A NGINX (Puerto 80)
     - echo "🔥 Atacando Nginx con OWASP ZAP..."
     - |
       docker run --rm --network $DOCKER_NETWORK \
@@ -200,6 +186,7 @@ dast_owasp_zap:
       -t http://nginx-proxy \
       -r zap-nginx-report.html || true
       
+    # Limpieza
     - docker rm -f nginx-proxy web
     - docker network rm $DOCKER_NETWORK
   artifacts:
@@ -209,7 +196,7 @@ dast_owasp_zap:
     expire_in: 1 week
 
 # =====================================================
-# 10. DEPLOY (A DOCKER HUB)
+# 9. DEPLOY TO DOCKERHUB
 # =====================================================
 deploy_to_dockerhub:
   stage: deploy
@@ -217,8 +204,9 @@ deploy_to_dockerhub:
   services:
     - docker:dind
   script:
-    - echo "🚚 Desplegando a Docker Hub..."
+    - echo "🚚 Desplegando imagen a Docker Hub..."
     - docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
+    # Construimos y subimos la imagen de la Aplicación
     - docker build -t $IMAGE_TAG .
     - docker push $IMAGE_TAG
     - "echo ✅ Imagen publicada: $IMAGE_TAG"
