@@ -1,18 +1,25 @@
-# Imagen base
-FROM python:3.11-slim
+# Usamos una imagen ligera de Python
+FROM python:3.10-slim
 
-# Directorio de trabajo
+# Establecemos el directorio de trabajo DENTRO del contenedor
 WORKDIR /app
 
-# Copiamos archivos
-COPY app/requirements.txt .
+# 1. Copiamos los requirements desde la carpeta 'backend'
+# ANTES: COPY app/requirements.txt .
+# AHORA:
+COPY backend/requirements.txt .
+
+# 2. Instalamos dependencias
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install gunicorn  # Aseguramos que gunicorn esté instalado para producción
 
-# Copiamos el resto de la app
-COPY app/ .
+# 3. Copiamos el resto del código desde la carpeta 'backend'
+# ANTES: COPY app/ .
+# AHORA:
+COPY backend/ .
 
-# Exponemos el puerto 5000
+# Exponemos el puerto
 EXPOSE 5000
 
-# Comando para ejecutar el servidor
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "wsgi:app"]
+# Comando por defecto (Usamos Gunicorn como vimos en la entrega 2)
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "wsgi:app"]
