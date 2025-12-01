@@ -5,11 +5,9 @@ services:
 
 variables:
   AUTO_DEVOPS_ENABLED: "false"
+  # Asegúrate de configurar DOCKER_USER y DOCKER_PASS en Settings > CI/CD > Variables
   IMAGE_TAG: "$DOCKER_USER/proyecto-devsecops:latest"
 
-# ---------------------------------------------------------------------------
-# DEFINICIÓN DE ETAPAS (STAGES) - ORDEN ACTUALIZADO
-# ---------------------------------------------------------------------------
 stages:
   - validate-backend
   - validate-frontend
@@ -17,8 +15,8 @@ stages:
   - build-backend
   - Secret-Scanning-IAC
   - IAC-Scanning-Checkov
-  - SCA(trivy)        # <--- AHORA VA PRIMERO
-  - SAST(Semgrep)     # <--- LUEGO EL SAST
+  - SCA(trivy)
+  - SAST(Semgrep)
   - DAST(OWASP)
   - deploy
 
@@ -31,7 +29,7 @@ validate_backend_structure:
   script:
     - echo "🔍 Verificando estructura Backend..."
     - ls -la backend/
-    - if [ ! -f "Dockerfile" ]; then echo "❌ Falta Dockerfile"; exit 1; fi
+    - "if [ ! -f Dockerfile ]; then echo ❌ Falta Dockerfile; exit 1; fi"
     - echo "✅ Estructura Backend correcta."
 
 # =====================================================
@@ -44,7 +42,7 @@ validate_frontend_deps:
     - echo "📦 Verificando dependencias del Frontend..."
     - cd frontend
     - npm install --package-lock-only --ignore-scripts
-    - echo "✅ Frontend tiene un package.json válido."
+    - echo "✅ Dependencias de Frontend validadas."
 
 # =====================================================
 # 3. TEST BACKEND
@@ -56,6 +54,7 @@ unit_tests_backend:
     - echo "🧪 Ejecutando pruebas unitarias del Backend..."
     - pip install -r backend/requirements.txt
     - pip install pytest
+    # Apuntamos a la carpeta correcta 'backend/tests'
     - pytest backend/tests/
   artifacts:
     when: always
@@ -81,7 +80,7 @@ scan_secrets_repo_gitleaks:
     name: zricethezav/gitleaks:latest
     entrypoint: [""]
   script:
-    - gitleaks detect --source=. -v --report-path gitleaks-report.json
+    - "gitleaks detect --source=. -v --report-path gitleaks-report.json"
   allow_failure: true
   artifacts:
     paths: [gitleaks-report.json]
@@ -94,8 +93,8 @@ scan_secrets_iac_trufflehog:
   script:
     - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b .
     - mkdir -p ./iac/cloud_examples
-    - ./trufflehog filesystem ./iac/cloud_examples --results=verified,unknown --json > trufflehog-report.json || true
-    - if [ ! -s trufflehog-report.json ]; then echo '{"results":[]}' > trufflehog-report.json; fi
+    - "./trufflehog filesystem ./iac/cloud_examples --results=verified,unknown --json > trufflehog-report.json || true"
+    - "if [ ! -s trufflehog-report.json ]; then echo '{\"results\":[]}' > trufflehog-report.json; fi"
   allow_failure: true
   artifacts:
     paths: [trufflehog-report.json]
@@ -110,14 +109,14 @@ iac_scan_checkov:
     entrypoint: [""]
   script:
     - mkdir -p ./iac/cloud_examples
-    - checkov -d ./iac/cloud_examples -o json > checkov-report.json || true
+    - "checkov -d ./iac/cloud_examples -o json > checkov-report.json || true"
     - cat checkov-report.json
   allow_failure: true
   artifacts:
     paths: [checkov-report.json]
 
 # =====================================================
-# 7. SCA (TRIVY) - AHORA ANTES DE SAST
+# 7. SCA (TRIVY)
 # =====================================================
 sca_trivy_scan:
   stage: SCA(trivy)
@@ -125,7 +124,7 @@ sca_trivy_scan:
     name: aquasec/trivy:latest
     entrypoint: [""]
   script:
-    - trivy fs . --format json --output trivy-report.json
+    - "trivy fs . --format json --output trivy-report.json"
   allow_failure: true
   artifacts:
     paths: [trivy-report.json]
@@ -141,13 +140,13 @@ sast_semgrep_scan:
   script:
     - rm -rf /src 2>/dev/null || true
     - ln -s $CI_PROJECT_DIR /src
-    - semgrep scan --config=auto --json --output=semgrep-report.json .
+    - "semgrep scan --config=auto --json --output=semgrep-report.json ."
   allow_failure: true
   artifacts:
     paths: [semgrep-report.json]
 
 # =====================================================
-# 9. DAST (OWASP ZAP) - CON NGINX PROXY
+# 9. DAST (OWASP ZAP) - CON NGINX
 # =====================================================
 dast_owasp_zap:
   stage: DAST(OWASP)
@@ -160,7 +159,7 @@ dast_owasp_zap:
     - echo "🚀 Iniciando entorno DAST (Nginx + Backend)..."
     - docker network create $DOCKER_NETWORK
     
-    # 1. Levantar BACKEND
+    # 1. Levantar BACKEND (Usando ruta correcta 'backend/')
     - |
       docker run -d --name web --network $DOCKER_NETWORK \
       -v $PWD/backend:/app -w /app \
@@ -207,6 +206,6 @@ deploy_to_dockerhub:
     - docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
     - docker build -t $IMAGE_TAG .
     - docker push $IMAGE_TAG
-    - echo "✅ Imagen publicada: $IMAGE_TAG"
+    - "echo ✅ Imagen publicada: $IMAGE_TAG"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
