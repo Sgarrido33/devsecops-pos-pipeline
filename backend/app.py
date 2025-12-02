@@ -12,7 +12,7 @@ from urllib.parse import quote_plus
 load_dotenv()
 #test
 app = Flask(__name__)
-CORS(app)
+#CORS(app)
 
 # --- Configuración de la Base de Datos (MySQL) ---
 DB_USER = os.getenv("MYSQL_USER")
