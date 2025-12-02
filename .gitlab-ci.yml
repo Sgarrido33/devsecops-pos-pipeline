@@ -9,12 +9,11 @@ variables:
   # Optimizamos pip para que use caché
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
 
-# Definimos las etapas (Stages)
 stages:
-  - prepare          # <--- NUEVA ETAPA
+  - prepare        
   - test-backend
   - build-backend
-  - Secret-Scanning-IAC
+  - Secret-Scanning
   - IAC-Scanning-Checkov
   - SCA(trivy)
   - SAST(Semgrep)
@@ -119,7 +118,7 @@ build_image_dry_run:
 # 5. SECRET SCANNING
 # =====================================================
 scan_secrets_gitleaks:
-  stage: Secret-Scanning-IAC
+  stage: Secret-Scanning
   image:
     name: zricethezav/gitleaks:latest
     entrypoint: [""]
@@ -130,7 +129,7 @@ scan_secrets_gitleaks:
     paths: [gitleaks-report.json]
 
 scan_secrets_trufflehog:
-  stage: Secret-Scanning-IAC
+  stage: Secret-Scanning
   image: ubuntu:22.04
   before_script:
     - apt-get update -y && apt-get install -y git curl jq
@@ -150,7 +149,7 @@ iac_scan_checkov:
     name: bridgecrew/checkov:latest
     entrypoint: [""]
   script:
-    - "checkov -d . --check CKV_DOCKER_*,CKV_NGINX_* -o json > checkov-report.json || true"
+    - "checkov -d . -o json > checkov-report.json || true"
     - cat checkov-report.json
   allow_failure: true
   artifacts:
