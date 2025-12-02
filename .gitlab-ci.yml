@@ -5,11 +5,13 @@ services:
 
 variables:
   AUTO_DEVOPS_ENABLED: "false"
-  # Ajusta tu usuario aquí o en las variables de GitLab
   IMAGE_TAG: "$DOCKER_USER/proyecto-devsecops:latest"
+  # Optimizamos pip para que use caché
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
 
+# Definimos las etapas (Stages)
 stages:
-  - validate-structure
+  - prepare          # <--- NUEVA ETAPA
   - test-backend
   - build-backend
   - Secret-Scanning-IAC
@@ -20,21 +22,51 @@ stages:
   - deploy
 
 # =====================================================
-# 1. VALIDATE STRUCTURE (Backend & Frontend)
+# 1. PREPARE FRONTEND (Instala y guarda en Caché)
 # =====================================================
-validate_structure:
-  stage: validate-structure
-  image: alpine:latest
+prepare_frontend:
+  stage: prepare
+  image: node:18-alpine
   script:
-    - echo "🔍 Verificando estructura del proyecto..."
-    # Verificamos que existan las carpetas clave
-    - "if [ ! -d backend ]; then echo ❌ Falta carpeta backend; exit 1; fi"
-    - "if [ ! -d nginx ]; then echo ❌ Falta carpeta nginx; exit 1; fi"
-    - "if [ ! -f Dockerfile ]; then echo ❌ Falta Dockerfile en raíz; exit 1; fi"
-    - echo "✅ Estructura base correcta."
+    - echo "📦 Instalando dependencias Frontend..."
+    - cd frontend
+    - npm ci --prefer-offline --no-audit
+    - echo "✅ Dependencias Frontend listas."
+  # Guardamos 'node_modules' en caché para que otros jobs lo usen
+  cache:
+    key:
+      files:
+        - frontend/package-lock.json
+    paths:
+      - frontend/node_modules/
+    policy: pull-push
 
 # =====================================================
-# 2. TEST BACKEND (Unit Tests)
+# 2. PREPARE BACKEND (Crea entorno virtual y guarda)
+# =====================================================
+prepare_backend:
+  stage: prepare
+  image: python:3.10-slim
+  script:
+    - echo "🐍 Preparando entorno virtual Backend..."
+    - cd backend
+    - python -m venv venv
+    - source venv/bin/activate
+    - pip install -r requirements.txt
+    - pip install pytest cryptography gunicorn
+    - echo "✅ Dependencias Backend listas en virtualenv."
+  # Guardamos la carpeta 'venv' y el caché de pip
+  cache:
+    key:
+      files:
+        - backend/requirements.txt
+    paths:
+      - backend/venv/
+      - .cache/pip/
+    policy: pull-push
+
+# =====================================================
+# 3. TEST BACKEND (Usa el caché del paso anterior)
 # =====================================================
 unit_tests_backend:
   stage: test-backend
@@ -48,12 +80,20 @@ unit_tests_backend:
     MYSQL_PASSWORD: "test_password"
     MYSQL_DATABASE: "test_db"
     MYSQL_ROOT_PASSWORD: "root_password" 
+  # Recuperamos el caché (solo lectura)
+  cache:
+    key:
+      files:
+        - backend/requirements.txt
+    paths:
+      - backend/venv/
+      - .cache/pip/
+    policy: pull
   script:
-    - echo "🧪 Ejecutando pruebas unitarias del Backend..."
+    - echo "🧪 Ejecutando pruebas unitarias..."
     - cd backend
-    - pip install -r requirements.txt
-    - pip install pytest cryptography
-    # Ejecutamos los tests. PYTHONPATH asegura que Python encuentre los módulos
+    # Activamos el entorno virtual creado en 'prepare_backend'
+    - source venv/bin/activate 
     - export PYTHONPATH=.
     - pytest tests/ --junitxml=../report.xml
   artifacts:
@@ -64,18 +104,19 @@ unit_tests_backend:
       - report.xml
 
 # =====================================================
-# 3. BUILD BACKEND (Dry Run)
+# 4. BUILD BACKEND (Dry Run)
 # =====================================================
+# Nota: Docker build NO puede usar el caché de CI, 
+# debe instalar sus cosas dentro de la imagen.
 build_image_dry_run:
   stage: build-backend
   script:
-    - echo "🐳 Verificando construcción de la imagen (Backend)..."
-    # Asumimos que el Dockerfile de la raíz es para la App Python
+    - echo "🐳 Verificando construcción de la imagen..."
     - docker build -t test-backend .
     - echo "✅ Build exitoso."
 
 # =====================================================
-# 4. SECRET SCANNING (IAC + REPO)
+# 5. SECRET SCANNING
 # =====================================================
 scan_secrets_gitleaks:
   stage: Secret-Scanning-IAC
@@ -95,14 +136,13 @@ scan_secrets_trufflehog:
     - apt-get update -y && apt-get install -y git curl jq
   script:
     - curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b .
-    # Escaneamos todo el sistema de archivos actual
     - "./trufflehog filesystem . --results=verified,unknown --json > trufflehog-report.json || true"
   allow_failure: true
   artifacts:
     paths: [trufflehog-report.json]
 
 # =====================================================
-# 5. IAC SCANNING (CHECKOV)
+# 6. IAC SCANNING
 # =====================================================
 iac_scan_checkov:
   stage: IAC-Scanning-Checkov
@@ -110,7 +150,6 @@ iac_scan_checkov:
     name: bridgecrew/checkov:latest
     entrypoint: [""]
   script:
-    # Escanea el Dockerfile raíz y configs de Nginx si las detecta
     - "checkov -d . --check CKV_DOCKER_*,CKV_NGINX_* -o json > checkov-report.json || true"
     - cat checkov-report.json
   allow_failure: true
@@ -118,7 +157,7 @@ iac_scan_checkov:
     paths: [checkov-report.json]
 
 # =====================================================
-# 6. SCA (TRIVY)
+# 7. SCA (TRIVY)
 # =====================================================
 sca_trivy_scan:
   stage: SCA(trivy)
@@ -132,7 +171,7 @@ sca_trivy_scan:
     paths: [trivy-report.json]
 
 # =====================================================
-# 7. SAST (SEMGREP)
+# 8. SAST (SEMGREP)
 # =====================================================
 sast_semgrep_scan:
   stage: SAST(Semgrep)
@@ -148,7 +187,7 @@ sast_semgrep_scan:
     paths: [semgrep-report.json]
 
 # =====================================================
-# 8. DAST (OWASP ZAP) - PRODUCCION (NGINX + GUNICORN + DB)
+# 9. DAST (OWASP ZAP)
 # =====================================================
 dast_owasp_zap:
   stage: DAST(OWASP)
@@ -158,49 +197,26 @@ dast_owasp_zap:
   variables:
     DOCKER_NETWORK: "app-net"
   script:
-    - echo "🚀 Iniciando entorno DAST Simulando Producción..."
-    - docker network create $DOCKER_NETWORK || true
-    
-    # 1. Levantar BASE DE DATOS (Necesaria para que el backend no falle)
-    - echo "   1. Iniciando MySQL..."
-    - |
-      docker run -d --name mysql --network $DOCKER_NETWORK \
-      -e MYSQL_ROOT_PASSWORD=root_password \
-      -e MYSQL_DATABASE=test_db \
-      -e MYSQL_USER=test_user \
-      -e MYSQL_PASSWORD=test_password \
-      mysql:5.7
-    - sleep 15 # Damos tiempo a MySQL para inicializar
-    
-    # 2. Levantar BACKEND (Conectado a la DB)
-    - echo "   2. Iniciando Backend..."
+    - echo "🚀 Iniciando entorno DAST..."
+    - docker network create $DOCKER_NETWORK
+    # Backend
     - |
       docker run -d --name web --network $DOCKER_NETWORK \
       -v $PWD/backend:/app -w /app \
-      -e MYSQL_HOST=mysql \
-      -e MYSQL_USER=test_user \
-      -e MYSQL_PASSWORD=test_password \
-      -e MYSQL_DATABASE=test_db \
       python:3.10-slim \
       sh -c "pip install -r requirements.txt && pip install gunicorn && gunicorn -w 4 -b 0.0.0.0:5000 wsgi:app"
-    - sleep 10 # Damos tiempo a Gunicorn para arrancar
-
-    # 3. Levantar NGINX (Reverse Proxy)
-    - echo "   3. Iniciando Nginx..."
+    - sleep 10
+    # Nginx
     - |
       docker run -d --name nginx-proxy --network $DOCKER_NETWORK \
       -p 80:80 \
       -v $PWD/nginx/nginx.conf:/etc/nginx/conf.d/default.conf \
       nginx:latest
     - sleep 5
-    
-    # 4. Preparar reporte y ATACAR
-    - echo "🔥 Atacando Nginx con OWASP ZAP..."
-    
-    # Creamos el archivo y damos permisos para evitar error de escritura
+    # Ataque ZAP
+    - echo "🔥 Atacando..."
     - touch zap-nginx-report.html
     - chmod 666 zap-nginx-report.html
-
     - |
       docker run --rm --network $DOCKER_NETWORK \
       -v $PWD:/zap/wrk:rw \
@@ -208,9 +224,7 @@ dast_owasp_zap:
       zap-baseline.py \
       -t http://nginx-proxy \
       -r zap-nginx-report.html || true
-      
-    # Limpieza
-    - docker rm -f nginx-proxy web mysql
+    - docker rm -f nginx-proxy web
     - docker network rm $DOCKER_NETWORK
   artifacts:
     when: always
@@ -219,7 +233,7 @@ dast_owasp_zap:
     expire_in: 1 week
 
 # =====================================================
-# 9. DEPLOY TO DOCKERHUB
+# 10. DEPLOY
 # =====================================================
 deploy_to_dockerhub:
   stage: deploy
@@ -227,9 +241,8 @@ deploy_to_dockerhub:
   services:
     - docker:dind
   script:
-    - echo "🚚 Desplegando imagen a Docker Hub..."
+    - echo "🚚 Desplegando..."
     - docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
-    # Construimos y subimos la imagen de la Aplicación
     - docker build -t $IMAGE_TAG .
     - docker push $IMAGE_TAG
     - "echo ✅ Imagen publicada: $IMAGE_TAG"
