@@ -27,5 +27,5 @@ resource "aws_s3_bucket_public_access_block" "insecure_bucket_pab" {
 
 resource "aws_s3_bucket_acl" "insecure_bucket_acl" {
   bucket = aws_s3_bucket.insecure_bucket.id
-  acl    = "public-read-write"
+  acl    = "private"
 }
