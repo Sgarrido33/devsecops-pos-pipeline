@@ -148,7 +148,7 @@ sast_semgrep_scan:
     paths: [semgrep-report.json]
 
 # =====================================================
-# 8. DAST (OWASP ZAP) - PRODUCCION (NGINX + GUNICORN)
+# 8. DAST (OWASP ZAP) - PRODUCCION (NGINX + GUNICORN + DB)
 # =====================================================
 dast_owasp_zap:
   stage: DAST(OWASP)
@@ -159,18 +159,34 @@ dast_owasp_zap:
     DOCKER_NETWORK: "app-net"
   script:
     - echo "🚀 Iniciando entorno DAST Simulando Producción..."
-    - docker network create $DOCKER_NETWORK
+    - docker network create $DOCKER_NETWORK || true
     
-    # 1. Levantar BACKEND (Python + Gunicorn)
-    # Importante: Nombre 'web' para que Nginx lo encuentre
+    # 1. Levantar BASE DE DATOS (Necesaria para que el backend no falle)
+    - echo "   1. Iniciando MySQL..."
+    - |
+      docker run -d --name mysql --network $DOCKER_NETWORK \
+      -e MYSQL_ROOT_PASSWORD=root_password \
+      -e MYSQL_DATABASE=test_db \
+      -e MYSQL_USER=test_user \
+      -e MYSQL_PASSWORD=test_password \
+      mysql:5.7
+    - sleep 15 # Damos tiempo a MySQL para inicializar
+    
+    # 2. Levantar BACKEND (Conectado a la DB)
+    - echo "   2. Iniciando Backend..."
     - |
       docker run -d --name web --network $DOCKER_NETWORK \
       -v $PWD/backend:/app -w /app \
+      -e MYSQL_HOST=mysql \
+      -e MYSQL_USER=test_user \
+      -e MYSQL_PASSWORD=test_password \
+      -e MYSQL_DATABASE=test_db \
       python:3.10-slim \
       sh -c "pip install -r requirements.txt && pip install gunicorn && gunicorn -w 4 -b 0.0.0.0:5000 wsgi:app"
     - sleep 10 # Damos tiempo a Gunicorn para arrancar
 
-    # 2. Levantar NGINX (Reverse Proxy)
+    # 3. Levantar NGINX (Reverse Proxy)
+    - echo "   3. Iniciando Nginx..."
     - |
       docker run -d --name nginx-proxy --network $DOCKER_NETWORK \
       -p 80:80 \
@@ -178,10 +194,11 @@ dast_owasp_zap:
       nginx:latest
     - sleep 5
     
-    # 3. ATACAR A NGINX (Puerto 80)
+    # 4. Preparar reporte y ATACAR
     - echo "🔥 Atacando Nginx con OWASP ZAP..."
-
-    - touch zap-nginx-report.html        # Creamos el archivo vacío
+    
+    # Creamos el archivo y damos permisos para evitar error de escritura
+    - touch zap-nginx-report.html
     - chmod 666 zap-nginx-report.html
 
     - |
@@ -193,7 +210,7 @@ dast_owasp_zap:
       -r zap-nginx-report.html || true
       
     # Limpieza
-    - docker rm -f nginx-proxy web
+    - docker rm -f nginx-proxy web mysql
     - docker network rm $DOCKER_NETWORK
   artifacts:
     when: always
