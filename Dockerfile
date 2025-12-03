@@ -3,7 +3,7 @@ FROM python:3.10-slim
 WORKDIR /app
 
 COPY backend/requirements.txt .
-
+#dfsfsf
 # Instalamos dependencias y Gunicorn (Actualizado para evitar vulnerabilidad Trivy)
 # Forzamos versión segura de Gunicorn
 RUN pip install --no-cache-dir -r requirements.txt && \
