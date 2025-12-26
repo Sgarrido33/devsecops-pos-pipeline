@@ -24,7 +24,7 @@ El objetivo principal no es solo la funcionalidad del software, sino la integrid
 
 El sistema consta de un frontend en React y un backend en Flask, orquestados mediante Docker Compose y servidos a través de un proxy inverso Nginx.
 
-![Arquitectura del Sistema](docs/images/architecture.png)
+![Arquitectura del Sistema](docs/images/Architecture.png)
 
 ---
 
@@ -111,3 +111,7 @@ La aplicación estará disponible en: http://localhost:80
 * Frontend: React, Vite, Pico.css
 * Database: MySQL 5.7
 * Proxy: Nginx (Hardened configuration)
+
+## Disclaimer
+
+Este proyecto fue desarrollado con fines académicos para demostrar la integración de herramientas de seguridad en un flujo DevOps moderno.
